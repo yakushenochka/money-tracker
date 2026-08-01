@@ -63,17 +63,61 @@
         .balance-card { 
             background: linear-gradient(135deg, #ec4899 0%, #db2777 100%); 
             border-radius: 30px; 
-            padding: 40px; 
+            padding: 30px; 
             color: white; 
-            text-align: center; 
             flex: 1; 
             display: flex; 
-            flex-direction: column; 
-            justify-content: center; 
+            flex-direction: row; 
+            gap: 22px; 
             box-shadow: 0 16px 40px rgba(236, 72, 153, 0.3); 
             position: relative; 
             overflow: hidden; 
         }
+        .balance-left {
+            flex: 0 0 38%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+        }
+        .balance-right {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            border-left: 1px solid rgba(255,255,255,0.25);
+            padding-left: 22px;
+            z-index: 1;
+        }
+        .history-title { font-size: 12px; font-weight: 600; opacity: 0.9; margin-bottom: 10px; letter-spacing: 0.3px; }
+        .history-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; max-height: 260px; }
+        .history-empty { opacity: 0.75; font-size: 11px; text-align: center; padding: 30px 0; }
+        .history-item { 
+            background: rgba(255,255,255,0.15); 
+            border-radius: 10px; 
+            padding: 8px 10px; 
+            display: flex; 
+            align-items: center; 
+            gap: 8px; 
+            font-size: 11px; 
+        }
+        .history-item .h-icon { 
+            width: 22px; height: 22px; border-radius: 50%; 
+            display: flex; align-items: center; justify-content: center; 
+            font-size: 12px; font-weight: 700; flex-shrink: 0; 
+        }
+        .history-item.income .h-icon { background: #bbf7d0; color: #166534; }
+        .history-item.expense .h-icon { background: rgba(255,255,255,0.35); color: white; }
+        .history-item .h-info { flex: 1; min-width: 0; }
+        .history-item .h-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .history-item .h-date { opacity: 0.8; font-size: 10px; margin-top: 2px; }
+        .history-item .h-amount { font-weight: 700; white-space: nowrap; }
+        .history-item .h-delete { 
+            background: transparent; border: none; color: rgba(255,255,255,0.75); 
+            cursor: pointer; font-size: 15px; padding: 2px 4px; line-height: 1; 
+        }
+        .history-item .h-delete:hover { color: white; }
 
         /* Цель / копилка */
         .goal-card {
@@ -370,11 +414,17 @@
         
         <!-- Balance (50%) -->
         <div class="balance-section">
-            <!-- Верх: баланс -->
+            <!-- Верх: баланс + история -->
             <div class="balance-card">
-                <div class="balance-label">Твой баланс</div>
-                <div class="balance-value" id="balanceValue">3,220</div>
-                <div class="balance-subtitle">BYN</div>
+                <div class="balance-left">
+                    <div class="balance-label">Твой баланс</div>
+                    <div class="balance-value" id="balanceValue">0</div>
+                    <div class="balance-subtitle">BYN</div>
+                </div>
+                <div class="balance-right">
+                    <div class="history-title">История операций</div>
+                    <div class="history-list" id="historyList"></div>
+                </div>
             </div>
 
             <!-- Низ: цель / копилка -->
@@ -492,20 +542,22 @@
     <!-- Converter -->
     <div class="converter">
         <div class="converter-title">💱 Конвертер</div>
-        <input type="number" placeholder="100">
-        <select>
+        <input type="number" id="converterAmountFrom" placeholder="100" value="100" oninput="convertCurrency()">
+        <select id="converterCurrencyFrom" onchange="convertCurrency()">
             <option>USD</option>
             <option>RUB</option>
             <option>EUR</option>
+            <option>BYN</option>
         </select>
         <div class="converter-arrow">⇄</div>
-        <input type="number" placeholder="3000">
-        <select>
+        <input type="number" id="converterAmountTo" placeholder="Результат" readonly>
+        <select id="converterCurrencyTo" onchange="convertCurrency()">
             <option>BYN</option>
             <option>RUB</option>
             <option>USD</option>
+            <option>EUR</option>
         </select>
-        <div class="converter-output">Live курс</div>
+        <div class="converter-output" id="converterStatus">Загрузка курса…</div>
     </div>
 
     <!-- Navigation -->
@@ -704,6 +756,7 @@
         let plannedExpenses = JSON.parse(localStorage.getItem('plannedExpenses')) || [];
         let recurringExpenses = JSON.parse(localStorage.getItem('recurringExpenses')) || [];
         let goal = JSON.parse(localStorage.getItem('goal')) || { name: '', target: 0, saved: 0 };
+        let transactions = JSON.parse(localStorage.getItem('transactions')) || [];
         let incomeCategories = JSON.parse(localStorage.getItem('incomeCategories')) || [
             'Зарплата', 'Фриланс', 'Инвестиции'
         ];
@@ -722,6 +775,9 @@
             renderCategories();
             updateCategorySelects();
             renderGoal();
+            renderBalance();
+            renderHistory();
+            loadExchangeRates();
         });
 
         function setCurrentDate() {
@@ -1367,12 +1423,180 @@ ${plannedExpenses.map(e => `- ${e.name}: ${e.amount} BYN, ${e.date}, ${e.paid ? 
             document.getElementById(name + 'Modal').classList.remove('active');
         }
 
+        // ===== Баланс и история операций =====
+        function convertToBYN(amount, currency) {
+            return amount * (exchangeRates[currency] || 1);
+        }
+
+        function formatDate(dateStr) {
+            if (!dateStr) return '';
+            const [y, m, d] = dateStr.split('-');
+            return `${d}.${m}.${y}`;
+        }
+
+        function renderBalance() {
+            let total = 0;
+            transactions.forEach(t => {
+                const inByn = convertToBYN(t.amount, t.currency);
+                total += t.type === 'income' ? inByn : -inByn;
+            });
+            document.getElementById('balanceValue').textContent = Math.round(total).toLocaleString('ru-RU');
+        }
+
+        function renderHistory() {
+            const list = document.getElementById('historyList');
+            list.innerHTML = '';
+
+            if (transactions.length === 0) {
+                list.innerHTML = '<div class="history-empty">Пока нет операций.<br>Добавь первый доход или расход!</div>';
+                return;
+            }
+
+            const sorted = [...transactions].sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.id - a.id);
+
+            sorted.forEach(t => {
+                const div = document.createElement('div');
+                div.className = 'history-item ' + t.type;
+                const sign = t.type === 'income' ? '+' : '−';
+                const label = t.description ? `${t.category} · ${t.description}` : t.category;
+                div.innerHTML = `
+                    <div class="h-icon">${t.type === 'income' ? '+' : '−'}</div>
+                    <div class="h-info">
+                        <div class="h-name">${label}</div>
+                        <div class="h-date">${formatDate(t.date)}</div>
+                    </div>
+                    <div class="h-amount">${sign}${t.amount} ${t.currency}</div>
+                    <button class="h-delete" onclick="deleteTransaction(${t.id})">×</button>
+                `;
+                list.appendChild(div);
+            });
+        }
+
+        function deleteTransaction(id) {
+            transactions = transactions.filter(t => t.id !== id);
+            localStorage.setItem('transactions', JSON.stringify(transactions));
+            renderBalance();
+            renderHistory();
+        }
+
+        // ===== Единый курс валют — Национальный банк Республики Беларусь =====
+        // exchangeRates: сколько BYN стоит 1 единица валюты. Используется и балансом, и конвертером.
+        let exchangeRates = { BYN: 1, USD: 3.2, EUR: 3.5, RUB: 0.034 }; // запасные значения до загрузки
+
+        async function loadExchangeRates() {
+            const cached = JSON.parse(localStorage.getItem('nbrbRates') || 'null');
+            const sixHours = 6 * 60 * 60 * 1000;
+
+            if (cached && (Date.now() - cached.fetchedAt) < sixHours) {
+                exchangeRates = cached.rates;
+                updateConverterStatus('cached', cached.fetchedAt);
+                renderBalance();
+                convertCurrency();
+                return;
+            }
+
+            try {
+                const res = await fetch('https://www.nbrb.by/api/exrates/rates?periodicity=0');
+                const data = await res.json();
+
+                const rates = { BYN: 1 };
+                data.forEach(item => {
+                    rates[item.Cur_Abbreviation] = item.Cur_OfficialRate / item.Cur_Scale;
+                });
+
+                exchangeRates = rates;
+                localStorage.setItem('nbrbRates', JSON.stringify({ rates, fetchedAt: Date.now() }));
+                updateConverterStatus('live', Date.now());
+            } catch (e) {
+                if (cached) {
+                    exchangeRates = cached.rates;
+                    updateConverterStatus('cached', cached.fetchedAt);
+                } else {
+                    updateConverterStatus('fallback');
+                }
+            }
+
+            renderBalance();
+            convertCurrency();
+        }
+
+        function updateConverterStatus(status, fetchedAt) {
+            const el = document.getElementById('converterStatus');
+            if (!el) return;
+
+            if (status === 'live') {
+                el.textContent = 'Официальный курс НБ РБ, обновлён только что';
+            } else if (status === 'cached') {
+                const time = new Date(fetchedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+                el.textContent = `Курс НБ РБ на ${time}`;
+            } else {
+                el.textContent = 'Нет связи, примерный курс';
+            }
+        }
+
+        function convertCurrency() {
+            const amount = parseFloat(document.getElementById('converterAmountFrom').value);
+            const from = document.getElementById('converterCurrencyFrom').value;
+            const to = document.getElementById('converterCurrencyTo').value;
+            const output = document.getElementById('converterAmountTo');
+
+            if (!amount || amount <= 0) {
+                output.value = '';
+                return;
+            }
+
+            if (!exchangeRates[from] || !exchangeRates[to]) {
+                output.value = 'н/д';
+                return;
+            }
+
+            const amountInByn = amount * exchangeRates[from];
+            const result = amountInByn / exchangeRates[to];
+            output.value = result.toFixed(2);
+        }
+
         function addIncome() {
-            alert('Доход добавлен!');
+            const category = document.getElementById('incomeCategory').value;
+            const amount = parseFloat(document.getElementById('incomeAmount').value);
+            const currency = document.getElementById('incomeCurrency').value;
+            const date = document.getElementById('incomeDate').value;
+            const description = document.getElementById('incomeDescription').value;
+
+            if (!amount || amount <= 0) {
+                alert('Укажи сумму дохода!');
+                return;
+            }
+
+            transactions.push({ id: Date.now(), type: 'income', category, amount, currency, date, description });
+            localStorage.setItem('transactions', JSON.stringify(transactions));
+
+            document.getElementById('incomeAmount').value = '';
+            document.getElementById('incomeDescription').value = '';
+
+            renderBalance();
+            renderHistory();
         }
 
         function addExpense() {
-            alert('Расход добавлен!');
+            const category = document.getElementById('expenseCategory').value;
+            const amount = parseFloat(document.getElementById('expenseAmount').value);
+            const currency = document.getElementById('expenseCurrency').value;
+            const date = document.getElementById('expenseDate').value;
+            const description = document.getElementById('expenseDescription').value;
+
+            if (!amount || amount <= 0) {
+                alert('Укажи сумму расхода!');
+                return;
+            }
+
+            transactions.push({ id: Date.now(), type: 'expense', category, amount, currency, date, description });
+            localStorage.setItem('transactions', JSON.stringify(transactions));
+
+            document.getElementById('expenseAmount').value = '';
+            document.getElementById('expenseDescription').value = '';
+
+            renderBalance();
+            renderHistory();
         }
     </script>
 </body>
